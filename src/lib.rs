@@ -39,7 +39,7 @@ impl MeterRecorder {
         provider: impl MeterProvider,
         idle_timeout: Option<Duration>,
     ) -> Result<MeterRecorder, MetricsError> {
-        let meter = provider.meter("github.com/vibhavp/metrics-rs-opentelemetry", Some("0.0.1"));
+        let meter = provider.meter("github.com/vibhavp/metrics-rs-opentelemetry", Some("0.1.0"));
 
         let recorder = MeterRecorder {
             inner: Arc::new(Inner {
