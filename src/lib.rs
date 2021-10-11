@@ -2,7 +2,7 @@ use core::slice::Iter;
 use metrics::{GaugeValue, Key, Label, Recorder, Unit};
 use metrics_util::{Handle, MetricKind, MetricKindMask, Recency, Registry, Tracked};
 use opentelemetry::{
-    metrics::{BatchObserverResult, Meter, MeterProvider, MetricsError, Unit as OtelUnit},
+    metrics::{Meter, MeterProvider, MetricsError},
     KeyValue, Value,
 };
 use parking_lot::RwLock;
