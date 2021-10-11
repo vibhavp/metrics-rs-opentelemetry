@@ -39,7 +39,8 @@ impl MeterRecorder {
         provider: impl MeterProvider,
         idle_timeout: Option<Duration>,
     ) -> Result<MeterRecorder, MetricsError> {
-        let meter = provider.meter("github.com/vibhavp/metrics-opentelemetry", Some("0.0.1"));
+        let meter = provider.meter("github.com/vibhavp/metrics-rs-opentelemetry", Some("0.0.1"));
+
         let recorder = MeterRecorder {
             inner: Arc::new(Inner {
                 meter,
@@ -49,7 +50,6 @@ impl MeterRecorder {
                 units: RwLock::new(HashMap::new()),
             }),
         };
-        recorder.setup_batch_observer()?;
 
         Ok(recorder)
     }
@@ -74,84 +74,6 @@ impl MeterRecorder {
             }
         }
     }
-
-    fn setup_batch_observer(&self) -> Result<(), MetricsError> {
-        self.inner.meter.build_batch_observer(|batch| {
-            let metrics = self.inner.registry.get_handles();
-            let mut observations = Vec::with_capacity(metrics.len());
-
-            for ((kind, key), (gen, handle)) in metrics.into_iter() {
-                if !self
-                    .inner
-                    .recency
-                    .should_store(kind, &key, gen, &self.inner.registry)
-                {
-                    continue;
-                }
-
-                let units = self.inner.units.read();
-                let descriptions = self.inner.descriptions.read();
-
-                match kind {
-                    MetricKind::Counter => {
-                        let mut builder = batch.u64_sum_observer(key.name());
-                        if let Some(unit) = units.get(key.name()) {
-                            builder = builder.with_unit(OtelUnit::new(unit.as_str().to_string()));
-                        }
-                        if let Some(desc) = descriptions.get(key.name()) {
-                            builder = builder.with_description(desc.to_string());
-                        }
-
-                        observations.push((
-                            vec![builder.try_init()?.observation(handle.read_counter())],
-                            labels_to_keyvalue(key.labels()),
-                        ));
-                    }
-
-                    MetricKind::Gauge => {
-                        let mut builder = batch.f64_up_down_sum_observer(key.name());
-                        if let Some(unit) = units.get(key.name()) {
-                            builder = builder.with_unit(OtelUnit::new(unit.as_str().to_string()));
-                        }
-                        if let Some(desc) = descriptions.get(key.name()) {
-                            builder = builder.with_description(desc.to_string());
-                        }
-
-                        observations.push((
-                            vec![builder.try_init()?.observation(handle.read_gauge())],
-                            labels_to_keyvalue(key.labels()),
-                        ));
-                    }
-
-                    MetricKind::Histogram => {
-                        let mut builder = batch.f64_value_observer(key.name());
-                        if let Some(unit) = units.get(key.name()) {
-                            builder = builder.with_unit(OtelUnit::new(unit.as_str().to_string()));
-                        }
-                        if let Some(desc) = descriptions.get(key.name()) {
-                            builder = builder.with_description(desc.to_string());
-                        }
-
-                        let observer = builder.try_init()?;
-                        let mut obs = Vec::new();
-                        handle.read_histogram_with_clear(|values| {
-                            for value in values.iter() {
-                                obs.push(observer.observation(*value));
-                            }
-                        });
-
-                        observations.push((obs, labels_to_keyvalue(key.labels())));
-                    }
-                }
-            }
-
-            Ok(move |result: BatchObserverResult| {
-                for observation in observations.iter() {
-                    result.observe(&observation.1, &observation.0);
-                }
-            })
-        })
-    }
 }
 
 impl Recorder for MeterRecorder {
@@ -160,6 +82,28 @@ impl Recorder for MeterRecorder {
         self.inner
             .registry
             .op(MetricKind::Counter, key, |_| {}, Handle::counter);
+
+        let inner = self.inner.clone();
+        let key_1 = key.clone();
+        self.inner
+            .meter
+            .u64_sum_observer(key.name(), move |observer| {
+                let handles = inner.registry.get_handles();
+                let metric = handles.get(&(MetricKind::Counter, key_1.clone()));
+
+                if let Some(metric) = metric {
+                    if inner.recency.should_store(
+                        MetricKind::Counter,
+                        &key_1,
+                        metric.0.clone(),
+                        &inner.registry,
+                    ) {
+                        observer
+                            .observe(metric.1.read_counter(), &labels_to_keyvalue(key_1.labels()));
+                    }
+                }
+            })
+            .init();
     }
 
     fn register_gauge(&self, key: &Key, unit: Option<Unit>, description: Option<&'static str>) {
@@ -167,6 +111,27 @@ impl Recorder for MeterRecorder {
         self.inner
             .registry
             .op(MetricKind::Gauge, key, |_| {}, Handle::counter);
+
+        let inner = self.inner.clone();
+        let key_1 = key.clone();
+        self.inner
+            .meter
+            .f64_up_down_sum_observer(key.name(), move |observer| {
+                let handles = inner.registry.get_handles();
+                let metric = handles.get(&(MetricKind::Gauge, key_1.clone()));
+
+                if let Some(metric) = metric {
+                    if inner.recency.should_store(
+                        MetricKind::Gauge,
+                        &key_1,
+                        metric.0.clone(),
+                        &inner.registry,
+                    ) {
+                        observer
+                            .observe(metric.1.read_gauge(), &labels_to_keyvalue(key_1.labels()));
+                    }
+                }
+            });
     }
 
     fn register_histogram(&self, key: &Key, unit: Option<Unit>, description: Option<&'static str>) {
@@ -174,6 +139,31 @@ impl Recorder for MeterRecorder {
         self.inner
             .registry
             .op(MetricKind::Histogram, key, |_| {}, Handle::counter);
+
+        let inner = self.inner.clone();
+        let key_1 = key.clone();
+        self.inner
+            .meter
+            .f64_value_observer(key.name(), move |observer| {
+                let handles = inner.registry.get_handles();
+                let metric = handles.get(&(MetricKind::Histogram, key_1.clone()));
+
+                if let Some(metric) = metric {
+                    if inner.recency.should_store(
+                        MetricKind::Histogram,
+                        &key_1,
+                        metric.0.clone(),
+                        &inner.registry,
+                    ) {
+                        let key_values = &labels_to_keyvalue(key_1.labels());
+                        metric.1.read_histogram_with_clear(|values| {
+                            for value in values.iter() {
+                                observer.observe(*value, key_values);
+                            }
+                        });
+                    }
+                }
+            });
     }
 
     fn increment_counter(&self, key: &Key, value: u64) {
